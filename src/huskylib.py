@@ -1,37 +1,23 @@
 # HuskyLens Python Library
 # Author: Robert Prast (robert@dfrobot.com)
 # 08/03/2020
-# Dependenices :
-#   pyserial
-#   smbus
-#   pypng
-#
-# How to use :
-# 1) First import the library into your project and connect your HuskyLens
-# 2) Init huskylens
-#   A) Serial
-#          huskyLens = HuskyLensLibrary("SERIAL","COM_PORT", speed) *speed is integer
-#   B) I2C
-#           huskyLens = HuskyLensLibrary("I2C","", address=0xADDR) *address is hex integer
-# 3) Call your desired functions on the huskyLens object!
+# 
+# porting to EZ Robot
 ###
 # Example code
 '''
-huskyLens = HuskyLensLibrary("I2C","",address=0x32)
+huskyLens = HuskyLensLibrary(Bus(),address=0x32)
 huskyLens.algorthim("ALGORITHM_FACE_RECOGNITION")
 while(true):
     data=huskyLens.blocks()
     x=0
     for i in data:
         x=x+1
-        print("Face {} data: {}".format(x,i)
+        print("Face {} ID: {}".format(x,i.ID)
 '''
 
 
 import time
-import serial
-import png
-import json
 
 
 commandHeaderAndAddress = "55AA11"
@@ -68,50 +54,36 @@ class Block:
         self.learned= True if ID > 0 else False
         self.type="BLOCK"
 
+class Bus:
+    def write(self, address , data):
+        I2C.Write(address, data)
+
+    def read(self,address,len):
+        byteString = b''
+        for i in range(len):
+            r = I2C.Read(address,1)
+            byteString += bytes(r)
+        return byteString
 
 
 class HuskyLensLibrary:
-    def __init__(self, proto, comPort="", speed=3000000, channel=1, address=0x32):
-        self.proto = proto
+    def __init__(self, bus , address=0x32):
         self.address = address
-        self.checkOnceAgain=True
-        if(proto == "SERIAL"):
-            self.huskylensSer =serial.Serial(
-                baudrate=speed,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                bytesize=serial.EIGHTBITS,
-                timeout=.5
-            )
-            self.huskylensSer.dtr = False
-            self.huskylensSer.rts = False
-            time.sleep(.1)
-            self.huskylensSer.port=comPort
-            self.huskylensSer.open()
-            time.sleep(2)
-            self.knock()
-            time.sleep(.5)
-            self.knock()
-            time.sleep(.5)
-            self.knock()
-            # self.huskylensSer.timeout=5
-            self.huskylensSer.flushInput()
-            self.huskylensSer.flushOutput()
-            self.huskylensSer.flush()
-
-        elif (proto == "I2C"):
-            import smbus
-            self.huskylensSer = smbus.SMBus(channel)
-        self.lastCmdSent = ""
+        self.bus = bus
 
     def writeToHuskyLens(self, cmd):
-        self.lastCmdSent = cmd
-        if(self.proto == "SERIAL"):
-            self.huskylensSer.flush()
-            self.huskylensSer.flushInput()
-            self.huskylensSer.write(cmd)
-        else:
-            self.huskylensSer.write_i2c_block_data(self.address, 12, list(cmd))
+        print ("=>",''.join('{:02x}'.format(x) for x in bytearray(cmd)))
+        self.bus.write(self.address,bytearray(cmd))
+        
+    def readFromHuskyLens(self):
+        byteString = b''
+        byteString += self.bus.read(self.address,5)
+        len = int(bytearray(byteString)[3])+1
+        byteString += self.bus.read(self.address,len)
+
+        message = ''.join('{:02x}'.format(x) for x in bytearray(byteString))
+        print("<=",message)
+        return message
 
     def calculateChecksum(self, hexStr):
         total = 0
@@ -138,38 +110,20 @@ class HuskyLensLibrary:
         return [headers, address, data_length, command, data, checkSum]
 
     def getBlockOrArrowCommand(self):
-        if(self.proto == "SERIAL"):
-            byteString = self.huskylensSer.read(5)
-            byteString += self.huskylensSer.read(int(byteString[3]))
-            byteString += self.huskylensSer.read(1)
-        else:
-            byteString = b''
-            for i in range(5):
-                byteString += bytes([(self.huskylensSer.read_byte(self.address))])
-            for i in range(int(byteString[3])+1):
-                byteString += bytes([(self.huskylensSer.read_byte(self.address))])
+        
+        message = self.readFromHuskyLens()
 
-        commandSplit = self.splitCommandToParts(byteString.hex())
+        commandSplit = self.splitCommandToParts(message)
         isBlock = True if commandSplit[3] == "2a" else False
         return (commandSplit[4],isBlock)
 
     def processReturnData(self, numIdLearnFlag=False, frameFlag=False):
-        inProduction = True
-        byteString=""
-        if(inProduction):
             try:
-                if(self.proto == "SERIAL"):
-                    byteString = self.huskylensSer.read(5)
-                    byteString += self.huskylensSer.read(int(byteString[3]))
-                    byteString += self.huskylensSer.read(1)
-                else:
-                    byteString = b''
-                    for i in range(5):
-                        byteString += bytes([(self.huskylensSer.read_byte(self.address))])
-                    for i in range(int(byteString[3])+1):
-                        byteString += bytes([(self.huskylensSer.read_byte(self.address))])
-                commandSplit = self.splitCommandToParts(byteString.hex())
-                # print(commandSplit)
+                message = self.readFromHuskyLens()
+
+                commandSplit = self.splitCommandToParts(message)
+                print(commandSplit)
+
                 if(commandSplit[3] == "2e"):
                     self.checkOnceAgain=True
                     return "Knock Recieved"
@@ -182,17 +136,18 @@ class HuskyLensLibrary:
                     frameNumber = int(
                         commandSplit[4][10:12]+commandSplit[4][8:10], 16)
                     isBlock=True
+                    print("numberOfBlocksOrArrow",numberOfBlocksOrArrow)
                     for i in range(numberOfBlocksOrArrow):
                         tmpObj=self.getBlockOrArrowCommand()
                         isBlock=tmpObj[1]
                         returnData.append(tmpObj[0])
-
+                  
                     
                     # isBlock = True if commandSplit[3] == "2A"else False
                     
                     finalData = []
                     tmp = []
-                    # print(returnData)
+                    print(returnData)
                     for i in returnData:
                         tmp = []
                         for q in range(0, len(i), 4):
@@ -212,16 +167,9 @@ class HuskyLensLibrary:
                     if(frameFlag):
                         ret.append(frameNumber)
                     return ret
-            except:
-                if(self.checkOnceAgain):
-                    self.huskylensSer.timeout=5
-                    self.checkOnceAgain=False
-                    self.huskylensSer.timeout=.5
-                    return self.processReturnData()
+            except Exception as e:
+                print("except",e)
                 print("Read response error, please try again")
-                self.huskylensSer.flushInput()
-                self.huskylensSer.flushOutput()
-                self.huskylensSer.flush()
                 return []
 
     def convert_to_class_object(self,data,isBlock):
@@ -329,7 +277,7 @@ class HuskyLensLibrary:
     def blocks(self):
         cmd = self.cmdToBytes(commandHeaderAndAddress+"002131")
         self.writeToHuskyLens(cmd)
-        return self.processReturnData()[0]
+        return self.processReturnData()
 
     def arrows(self):
         cmd = self.cmdToBytes(commandHeaderAndAddress+"002232")
@@ -402,4 +350,3 @@ class HuskyLensLibrary:
         cmd = self.cmdToBytes(commandHeaderAndAddress+"002030")
         self.writeToHuskyLens(cmd)
         return self.processReturnData(frameFlag=True)[-1]
-
