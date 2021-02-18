@@ -60,9 +60,9 @@ class Bus:
 
     def read(self,address,len):
         byteString = b''
-        for i in range(len):
-            r = I2C.Read(address,1)
-            byteString += bytes(r)
+        #for i in range(len):
+        r = I2C.Read(address,len)
+        byteString += bytes(r)
         return byteString
 
 
